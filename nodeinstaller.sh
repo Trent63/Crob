@@ -9,10 +9,10 @@ ask() { read -r "$@" </dev/tty; }
 # ============================================
 # Настройки (правьте при необходимости)
 # ============================================
-CHECK_DOMAIN="de011.croboxvps.com"    # домен для проверки DNS
+CHECK_DOMAIN="example.com"    # домен для проверки DNS
 DEFAULT_TAG="2.8.0"                   # версия Remnanode по умолчанию
-DEFAULT_NODE_PORT="3000"              # NODE_PORT по умолчанию
-DEFAULT_SELFSTEAL_PORT="9443"         # порт selfsteal по умолчанию
+DEFAULT_NODE_PORT="2222"              # NODE_PORT по умолчанию
+DEFAULT_SELFSTEAL_PORT="7443"         # порт selfsteal по умолчанию
 DEFAULT_TEMPLATE="1"                  # шаблон маскировки (1-11)
 TAGS_TO_SHOW=15                       # сколько версий показывать
 WEB_SERVER="--nginx"                  # веб-сервер selfsteal: --nginx или --caddy
@@ -183,7 +183,7 @@ if ! command -v curl >/dev/null 2>&1; then
 fi
 
 # --- Домен ---
-ask -p "Введите домен (например nl115.croboxvps.com): " CERT_DOMAIN
+ask -p "Введите домен (например example.com): " CERT_DOMAIN
 [[ -n "${CERT_DOMAIN// }" ]] || { err "Домен не может быть пустым."; exit 1; }
 
 # --- Hostname из домена ---

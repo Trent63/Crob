@@ -9,9 +9,8 @@ ask() { read -r "$@" </dev/tty; }
 # ============================================
 # Настройки (правьте при необходимости)
 # ============================================
-CHECK_DOMAIN="example.com"    # домен для проверки DNS
 DEFAULT_TAG="2.8.0"                   # версия Remnanode по умолчанию
-DEFAULT_NODE_PORT="2222"              # NODE_PORT по умолчанию
+DEFAULT_NODE_PORT="3000"              # NODE_PORT по умолчанию
 DEFAULT_SELFSTEAL_PORT="8443"         # порт selfsteal по умолчанию
 DEFAULT_TEMPLATE="1"                  # шаблон маскировки (1-11)
 TAGS_TO_SHOW=15                       # сколько версий показывать
@@ -182,9 +181,17 @@ if ! command -v curl >/dev/null 2>&1; then
     apt-get update -y && apt-get install -y curl
 fi
 
-# --- Домен ---
-ask -p "Введите домен (например example.com): " CERT_DOMAIN
-[[ -n "${CERT_DOMAIN// }" ]] || { err "Домен не может быть пустым."; exit 1; }
+# --- Домен (РЕАЛЬНЫЙ, не example.com!) ---
+echo -e "\n\033[1;36m📝 Ввод основных параметров\033[0m"
+while true; do
+    ask -p "Введите РЕАЛЬНЫЙ домен (НЕ example.com!): " CERT_DOMAIN
+    if [[ "$CERT_DOMAIN" =~ ^example\. ]] || [[ "$CERT_DOMAIN" == "example.com" ]]; then
+        err "example.com — это тестовый домен. Введите реальный домен, на который вы можете изменить DNS."
+        continue
+    fi
+    [[ -n "${CERT_DOMAIN// }" ]] || { err "Домен не может быть пустым."; continue; }
+    break
+done
 
 # --- Hostname из домена ---
 HOSTNAME="$(echo "$CERT_DOMAIN" | cut -d. -f1 | tr '[:lower:]' '[:upper:]')"
@@ -208,6 +215,26 @@ choose_port "Введите порт selfsteal (HTTPS)" "$DEFAULT_SELFSTEAL_PORT
 # --- Шаблон ---
 choose_template
 
+# --- Проверка DNS ДО установки ---
+log "Проверка DNS для $CERT_DOMAIN"
+RESOLVED_IP="$(dig +short A "$CERT_DOMAIN" @1.1.1.1 2>/dev/null | head -1 || echo '')"
+SERVER_IP="$(curl -s -4 --max-time 5 ifconfig.io 2>/dev/null || echo '')"
+
+echo "Домен указывает на:   ${RESOLVED_IP:-❌ не разрешается}"
+echo "IP этого сервера:     ${SERVER_IP:-❌ не определён}"
+
+if [[ -z "$RESOLVED_IP" ]] || [[ -z "$SERVER_IP" ]]; then
+    err "DNS не настроена! Let's Encrypt не сможет выдать сертификат."
+    ask -p "Продолжить с self-signed сертификатом? (y/n): " CONTINUE
+    [[ "${CONTINUE,,}" == "y" ]] || { err "Отменено."; exit 1; }
+elif [[ "$RESOLVED_IP" != "$SERVER_IP" ]]; then
+    err "DNS домена указывает на ДРУГОЙ IP! ($RESOLVED_IP вместо $SERVER_IP)"
+    ask -p "Продолжить? (y/n): " CONTINUE
+    [[ "${CONTINUE,,}" == "y" ]] || { err "Отменено."; exit 1; }
+else
+    log "✅ DNS правильно настроена!"
+fi
+
 # --- Подтверждение ---
 echo ""
 log "Домен:            $CERT_DOMAIN"
@@ -218,7 +245,6 @@ log "NODE_PORT:        $NODE_PORT"
 log "SECRET_KEY:       ${SECRET_KEY:0:12}...(скрыто, ${#SECRET_KEY} символов)"
 log "Порт selfsteal:   $SELFSTEAL_PORT"
 log "Шаблон:           $SELFSTEAL_TEMPLATE"
-log "SSL:              автоматический (Let's Encrypt через selfsteal)"
 ask -p "Всё верно? (y/n): " CONFIRM
 [[ "${CONFIRM,,}" == "y" ]] || { err "Отменено."; exit 1; }
 
@@ -237,27 +263,12 @@ log "Установка hostname: $HOSTNAME"
 hostnamectl set-hostname "$HOSTNAME"
 
 # --- Открытие портов ---
-FW_PORTS=(443 "$NODE_PORT" "$SELFSTEAL_PORT")
+FW_PORTS=(443 80 "$NODE_PORT" "$SELFSTEAL_PORT")
 [[ -n "$XTLS_PORT" ]] && FW_PORTS+=("$XTLS_PORT")
 open_firewall_ports "${FW_PORTS[@]}"
 
-log "Проверка DNS $CHECK_DOMAIN"
-dig +short "$CHECK_DOMAIN" @1.1.1.1
-
-log "Проверка DNS основного домена $CERT_DOMAIN"
-RESOLVED_IP="$(dig +short A "$CERT_DOMAIN" @1.1.1.1 | head -1)"
-SERVER_IP="$(curl -s -4 --max-time 5 ifconfig.io 2>/dev/null || echo '')"
-echo "Домен указывает на: ${RESOLVED_IP:-неизвестно}"
-echo "IP этого сервера:   ${SERVER_IP:-неизвестно}"
-if [[ -n "$RESOLVED_IP" && -n "$SERVER_IP" && "$RESOLVED_IP" != "$SERVER_IP" ]]; then
-    warn "DNS домена НЕ совпадает с IP сервера!"
-    ask -p "Продолжить? (y/n): " GO
-    [[ "${GO,,}" == "y" ]] || { err "Отменено."; exit 1; }
-fi
-
 # ============================================
-# Установка remnanode — полностью без вопросов
-# --force пропускает ВСЁ кроме secret-key; secret-key даём флагом.
+# Установка remnanode
 # ============================================
 log "Установка remnanode $REMNANODE_TAG"
 
@@ -268,23 +279,44 @@ REMNA_ARGS=(install --force
 [[ -n "$XTLS_PORT" ]] && REMNA_ARGS+=(--xtls-port "$XTLS_PORT")
 
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) \
-    "${REMNA_ARGS[@]}"
+    "${REMNA_ARGS[@]}" || { err "Ошибка установки remnanode"; exit 1; }
 
-log "Установка selfsteal (авто, сертификат Let's Encrypt)"
+# ============================================
+# Установка selfsteal
+# ============================================
+log "Установка selfsteal (автоматическое получение Let's Encrypt сертификата)"
+
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal.sh) \
     $WEB_SERVER --force \
     --domain "$CERT_DOMAIN" \
     --port "$SELFSTEAL_PORT" \
     --template "$SELFSTEAL_TEMPLATE" \
-    install
+    install || {
+    err "⚠️  Ошибка установки selfsteal"
+    echo "Диагностика:"
+    echo "1. Проверьте DNS: dig $CERT_DOMAIN"
+    echo "2. Проверьте порты 80/443: ss -tlnp | grep -E ':80|:443'"
+    echo "3. Проверьте логи: docker logs nginx-selfsteal 2>&1 | tail -50"
+    exit 1
+}
 
 log "Готово!"
 echo -e "\033[1;32m════════════════════════════════════════════\033[0m"
+echo -e "  ✅ Установка завершена!"
+echo -e ""
 echo -e "  Домен:          $CERT_DOMAIN"
 echo -e "  Hostname:       $HOSTNAME"
-echo -e "  Remnanode:      $REMNANODE_TAG"
-echo -e "  NODE_PORT:      $NODE_PORT"
-[[ -n "$XTLS_PORT" ]] && echo -e "  XTLS_PORT:      $XTLS_PORT (legacy)"
-echo -e "  Selfsteal порт: $SELFSTEAL_PORT (шаблон $SELFSTEAL_TEMPLATE)"
-echo -e "  SSL:            автопродление через selfsteal"
+echo -e "  Remnanode:      $REMNANODE_TAG (порт $NODE_PORT)"
+[[ -n "$XTLS_PORT" ]] && echo -e "  XTLS_PORT:      $XTLS_PORT"
+echo -e "  Selfsteal:      порт $SELFSTEAL_PORT (шаблон $SELFSTEAL_TEMPLATE)"
+echo -e ""
+echo -e "  🔗 Reality конфиг:"
+echo -e "     serverNames: [\"$CERT_DOMAIN\"]"
+echo -e "     target: /dev/shm/nginx.sock"
+echo -e "     xver: 1"
+echo -e ""
+echo -e "  📊 Проверка статуса:"
+echo -e "     docker ps | grep -E 'remna|nginx'"
+echo -e "     selfsteal status"
+echo -e "     docker logs remnanode"
 echo -e "\033[1;32m════════════════════════════════════════════\033[0m"

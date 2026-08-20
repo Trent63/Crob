@@ -12,7 +12,7 @@ ask() { read -r "$@" </dev/tty; }
 CHECK_DOMAIN="example.com"    # домен для проверки DNS
 DEFAULT_TAG="2.8.0"                   # версия Remnanode по умолчанию
 DEFAULT_NODE_PORT="2222"              # NODE_PORT по умолчанию
-DEFAULT_SELFSTEAL_PORT="7443"         # порт selfsteal по умолчанию
+DEFAULT_SELFSTEAL_PORT="8443"         # порт selfsteal по умолчанию
 DEFAULT_TEMPLATE="1"                  # шаблон маскировки (1-11)
 TAGS_TO_SHOW=15                       # сколько версий показывать
 WEB_SERVER="--nginx"                  # веб-сервер selfsteal: --nginx или --caddy
